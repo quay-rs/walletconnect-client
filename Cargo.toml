@@ -1,0 +1,46 @@
+[package]
+name = "walletconnect-client"
+version = "0.1.0"
+edition = "2021"
+categories = ["cryptography::cryptocurrencies"]
+keywords = ["crypto", "ethers", "ethereum", "web3", "wasm", "walletconnect"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde-aux = { version = "4.2", default-features = false }
+serde_qs = "0.12"
+serde-wasm-bindgen = "0.5"
+serde_json = "1.0"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4.37"
+async-trait = "0.1"
+getrandom = { version = "0.2", features = ["js"] }
+ethers = "2.0"
+thiserror = "1.0"
+rand = "0.8"
+url = "2.4"
+bs58 = "0.5"
+chrono = { version = "0.4", features = ["serde"] }
+data-encoding = "2.4"
+derive_more = "0.99"
+jsonwebtoken = "8.3"
+futures = "0.3"
+js-sys = "0.3.64"
+ed25519-dalek = { version = "2.0", features = [
+    "serde",
+    "signature",
+    "rand_core",
+    "digest",
+] }
+sha2 = "0.10"
+chacha20poly1305 = "0.10"
+gloo-net = "0.4"
+gloo = { version = "0.10", features = ["futures"] }
+gloo-utils = "0.2"
+log = "0.4"
+hkdf = "0.12"
+x25519-dalek = { version = "2.0", features = [
+    "reusable_secrets",
+    "static_secrets",
+    "serde",
+] }
