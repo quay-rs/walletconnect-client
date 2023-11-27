@@ -16,13 +16,20 @@ use walletconnect-client::prelude::*;
 To initiate walletconnect connection with the wallet, set up your dApps metadata:
 
 ```rust
-let dapp = Metadata::from("Your dApp's name", "Your dApp's short description", "https://url.of.your.dapp", vec!["https://url.to.your.dapps.icon".to_string()]);
+let dapp = Metadata::from("Your dApp's name", 
+                          "Your dApp's short description", 
+                          "https://url.of.your.dapp", 
+                          vec!["https://url.to.your.dapps.icon".to_string()]);
 ```
 
 ...and once you'll get your projects id from WalletConnect portal, you can simply create the connection:
 
 ```rust 
-let client = WalletConnect::connect(PROJECT_ID, 1 /* Ethereums chain id */, dapp, Some(Box::new(move |event| debug!("Received an event from WallectConnect {event:?}")))).await?;
+let client = WalletConnect::connect(PROJECT_ID, 
+                                    1 /* Ethereums chain id */, 
+                                    dapp, 
+                                    Some(Box::new(move |event| 
+                                    debug!("Received an event from WallectConnect {event:?}")))).await?;
 let url = client.initiate_session().await?;
 ```
 
