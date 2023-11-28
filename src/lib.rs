@@ -9,6 +9,7 @@ pub mod metadata;
 pub mod prelude;
 pub mod rpc;
 pub mod serde_helpers;
+pub mod utils;
 pub mod watch;
 
 use std::{collections::HashMap, sync::Arc};
@@ -24,11 +25,13 @@ use self::{
         ErrorResponse, RequestPayload, Response, ResponseParams, SuccessfulResponse,
         TAG_SESSION_SETTLE_RESPONSE,
     },
+    utils::hash_message,
 };
 
 use chrono::{Duration, Utc};
 use ed25519_dalek::SigningKey;
-use ethers::types::H160;
+use ethers::types::transaction::eip712::Eip712;
+use ethers::types::{Signature, H160};
 use futures::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
@@ -202,6 +205,28 @@ impl WalletConnect {
         } else {
             H160::zero()
         }
+    }
+
+    pub async fn sign_message<S: AsRef<[u8]> + Send + Sync>(
+        &self,
+        message: S,
+    ) -> Result<Signature, Error> {
+        let message_hash = hash_message(message);
+        Err(Error::Unknown)
+    }
+
+    pub async fn sign_typed_data<T: Eip712 + Send + Sync>(
+        &self,
+        payload: &T,
+    ) -> Result<Signature, Error> {
+        Err(Error::Unknown)
+    }
+
+    pub async fn sign_transaction(
+        &self,
+        message: &ethers::types::transaction::eip2718::TypedTransaction,
+    ) -> Result<Signature, Error> {
+        Err(Error::Unknown)
     }
 
     pub async fn initiate_session(&mut self) -> Result<String, Error> {

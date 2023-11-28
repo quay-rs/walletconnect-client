@@ -44,3 +44,4 @@ x25519-dalek = { version = "2.0", features = [
     "static_secrets",
     "serde",
 ] }
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
