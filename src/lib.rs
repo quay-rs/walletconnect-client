@@ -28,12 +28,14 @@ use self::{
 
 use chrono::{Duration, Utc};
 use ed25519_dalek::SigningKey;
+use ethers::types::H160;
 use futures::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
 use gloo_net::websocket::{futures::WebSocket, Message, WebSocketError};
 use log::{debug, error};
+use metadata::{Chain, Method, Namespace, SessionAccount};
 use serde::Serialize;
 use url::Url;
 use wasm_bindgen::__rt::WasmRefCell;
@@ -168,6 +170,38 @@ impl WalletConnect {
             session: Session::from(metadata, chain_id),
             listener: if let Some(l) = listener { Some(Arc::new(l)) } else { None },
         })
+    }
+
+    pub fn can_send(&self) -> bool {
+        match self.namespace() {
+            Some(namespace) => namespace.methods.contains(&Method::SendTransaction),
+            None => false,
+        }
+    }
+
+    pub fn get_account(&self) -> Option<&SessionAccount> {
+        if let Some(namespace) = self.namespace() {
+            if let Some(accounts) = &namespace.accounts {
+                return accounts.iter().nth(0);
+            }
+        }
+        None
+    }
+
+    pub fn chain_id(&self) -> u64 {
+        if let Some(account) = self.get_account() {
+            let Chain::Eip155(chain_id) = account.chain;
+            return chain_id;
+        }
+        0
+    }
+
+    pub fn address(&self) -> ethers::types::Address {
+        if let Some(account) = self.get_account() {
+            account.account.into()
+        } else {
+            H160::zero()
+        }
     }
 
     pub async fn initiate_session(&mut self) -> Result<String, Error> {
@@ -459,6 +493,15 @@ impl WalletConnect {
             }
         }
         Ok(())
+    }
+
+    fn namespace(&self) -> Option<&Namespace> {
+        if let Some(namespaces) = &self.session.namespaces {
+            if let Some(eip155_namespace) = namespaces.get("eip155") {
+                return Some(eip155_namespace);
+            }
+        }
+        None
     }
 
     fn notify(&self, event: event::Event) {
