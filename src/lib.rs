@@ -12,6 +12,7 @@ pub mod serde_helpers;
 pub mod utils;
 pub mod watch;
 
+use std::sync::Mutex;
 use std::{collections::HashMap, sync::Arc};
 
 use self::rpc::TAG_SESSION_PROPOSE_REQUEST;
@@ -134,7 +135,7 @@ pub struct WalletConnect {
     id_generator: MessageIdGenerator,
     subscriptions: HashMap<Topic, String>,
     pending: HashMap<MessageId, rpc::Params>,
-    state: State,
+    state: Arc<Mutex<State>>,
     session: Session,
     listener: Option<Arc<Box<dyn Fn(event::Event) + Send + 'static>>>,
 }
@@ -172,7 +173,7 @@ impl WalletConnect {
             id_generator: MessageIdGenerator::default(),
             subscriptions: HashMap::new(),
             pending: HashMap::new(),
-            state: State::Connecting,
+            state: Arc::new(Mutex::new(State::Connecting)),
             session: Session::from(metadata, chain_id),
             listener: if let Some(l) = listener { Some(Arc::new(l)) } else { None },
         })
@@ -264,8 +265,9 @@ impl WalletConnect {
         let (topic, key) = self.cipher.generate();
         let pub_key = PublicKey::from(&key);
         self.session.proposer.public_key = DecodedClientId::from_key(&pub_key).to_hex();
-        self.state = State::InitialSubscription(topic.clone());
         self.subscribe(topic.clone()).await?;
+        let mut state = self.state.lock().map_err(|_| Error::Unknown)?;
+        *state = State::InitialSubscription(topic.clone());
 
         let mut this = self.clone();
         spawn_local(async move {
@@ -340,6 +342,22 @@ impl WalletConnect {
         };
         self.send(&req).await?;
         Ok(())
+    }
+
+    pub async fn request(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+        chain_id: u64,
+    ) -> Result<serde_json::Value, Error> {
+        let s = self.state.lock().map_err(|_| Error::Unknown)?;
+        let topic = match *s {
+            State::Connected(ref topic) => Ok(topic.clone()),
+            _ => Err(Error::Disconnected),
+        }?;
+
+        debug!("Can send on {topic}");
+        Err(Error::BadParam)
     }
 
     pub async fn wallet_respond(
@@ -433,8 +451,9 @@ impl WalletConnect {
                         topic,
                         DecodedClientId::from_hex(&responder.responder_public_key)?,
                     )?;
-                    self.state = State::SwitchingTopic(new_topic.clone());
                     self.subscribe(new_topic.clone()).await?;
+                    let mut state = self.state.lock().map_err(|_| Error::Unknown)?;
+                    *state = State::SwitchingTopic(new_topic.clone());
                     Ok(())
                 }
                 _ => {
@@ -458,14 +477,17 @@ impl WalletConnect {
                     let topic = sub.topic;
                     let sub_hash = response.result.to_string();
                     self.subscriptions.insert(topic.clone(), sub_hash);
-                    match &self.state {
+                    let state = self.state.lock().map_err(|_| Error::Unknown)?;
+                    let s = state.clone();
+                    drop(state);
+                    match s {
                         State::InitialSubscription(awaiting_topic) => {
-                            if topic == *awaiting_topic {
+                            if topic == awaiting_topic {
                                 self.state_change(State::SessionProposed(topic)).await?;
                             }
                         }
                         State::SwitchingTopic(awaiting_topic) => {
-                            if topic == *awaiting_topic {
+                            if topic == awaiting_topic {
                                 self.state_change(State::AwaitingSettlement(topic)).await?;
                             }
                         }
@@ -492,9 +514,12 @@ impl WalletConnect {
         topic: &Topic,
         request: &rpc::WalletRequest,
     ) -> Result<(), Error> {
+        let state = self.state.lock().map_err(|_| Error::Unknown)?;
+        let s = state.clone();
+        drop(state);
         match request.params {
             rpc::WalletMessage::Settlement(ref settlement) => {
-                if let State::AwaitingSettlement(settled_topic) = &self.state {
+                if let State::AwaitingSettlement(settled_topic) = s {
                     self.session.settle(&settlement);
                     self.state_change(State::Connected(settled_topic.clone())).await?;
                     // Inform about new wallets and chain - supress errors
@@ -521,9 +546,9 @@ impl WalletConnect {
         Ok(())
     }
 
-    async fn state_change(&mut self, state: State) -> Result<(), Error> {
-        debug!("State changed to {state:?}");
-        match state {
+    async fn state_change(&mut self, new_state: State) -> Result<(), Error> {
+        debug!("State changed from to {new_state:?}");
+        match new_state {
             State::SessionProposed(ref topic) => {
                 _ = self
                     .publish(
@@ -534,10 +559,12 @@ impl WalletConnect {
                         true,
                     )
                     .await?;
-                self.state = state.clone();
+                let mut state = self.state.lock().map_err(|_| Error::Unknown)?;
+                *state = new_state;
             }
             State::Disconnected => {
-                self.state = state;
+                let mut state = self.state.lock().map_err(|_| Error::Unknown)?;
+                *state = new_state;
                 debug!("WE NEED TO CLEAN UP!");
                 self.notify(event::Event::Disconnected);
             }
@@ -545,7 +572,8 @@ impl WalletConnect {
                 self.notify(event::Event::Connected);
             }
             _ => {
-                self.state = state;
+                let mut state = self.state.lock().map_err(|_| Error::Unknown)?;
+                *state = new_state;
             }
         }
         Ok(())
