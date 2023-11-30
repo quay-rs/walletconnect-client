@@ -30,8 +30,11 @@ use self::{
 
 use chrono::{Duration, Utc};
 use ed25519_dalek::SigningKey;
-use ethers::types::transaction::eip712::Eip712;
-use ethers::types::{Signature, H160};
+use ethers::types::Address;
+use ethers::types::{
+    transaction::eip712::Eip712,
+    {Signature, H160},
+};
 use futures::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
@@ -175,6 +178,10 @@ impl WalletConnect {
         })
     }
 
+    pub async fn disconnect(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
     pub fn can_send(&self) -> bool {
         match self.namespace() {
             Some(namespace) => namespace.methods.contains(&Method::SendTransaction),
@@ -191,6 +198,30 @@ impl WalletConnect {
         None
     }
 
+    pub fn get_accounts(&self) -> Option<Vec<SessionAccount>> {
+        if let Some(namespace) = self.namespace() {
+            return namespace.accounts.clone();
+        }
+        None
+    }
+
+    pub fn get_accounts_for_chain_id(&self, chain_id: u64) -> Option<Vec<Address>> {
+        if let Some(namespace) = self.namespace() {
+            if let Some(accounts) = &namespace.accounts {
+                return Some(
+                    accounts
+                        .iter()
+                        .filter(|a| {
+                            let Chain::Eip155(id) = a.chain;
+                            id == chain_id
+                        })
+                        .map(|a| a.account.into())
+                        .collect::<Vec<Address>>(),
+                );
+            }
+        }
+        None
+    }
     pub fn chain_id(&self) -> u64 {
         if let Some(account) = self.get_account() {
             let Chain::Eip155(chain_id) = account.chain;
