@@ -86,6 +86,20 @@ pub enum Method {
     SendTransaction,
 }
 
+impl FromStr for Method {
+    type Err = bool;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "personal_sign" => Ok(Method::Sign),
+            "eth_signTypedData" => Ok(Method::SignTypedData),
+            "eth_signTypedData_v4" => Ok(Method::SignTypedDataV4),
+            "eth_signTransaction" => Ok(Method::SignTransaction),
+            "eth_sendTransaction" => Ok(Method::SendTransaction),
+            _ => Err(false),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Chain {
     Eip155(u64),
@@ -224,6 +238,32 @@ impl Session {
             optional_namespaces: self.optional_namespaces.clone(),
             proposer: self.proposer.clone(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRpcRequestData {
+    pub method: String,
+    pub params: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRpcRequest {
+    pub request: SessionRpcRequestData,
+    pub chain_id: u64,
+}
+
+impl SessionRpcRequest {
+    pub fn new(method: &str, params: Option<serde_json::Value>, chain_id: u64) -> Self {
+        Self { request: SessionRpcRequestData { method: method.to_string(), params }, chain_id }
+    }
+}
+
+impl SessionPayload for SessionRpcRequest {
+    fn into_params(self) -> SessionParams {
+        SessionParams::Request(self)
     }
 }
 

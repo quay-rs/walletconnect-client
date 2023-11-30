@@ -1,7 +1,7 @@
 use super::{
     super::{
         domain::MessageId,
-        metadata::{Responder, SessionPropose, SessionSettlement},
+        metadata::{Responder, SessionPropose, SessionRpcRequest, SessionSettlement},
     },
     Serializable,
 };
@@ -18,6 +18,8 @@ pub struct Error {
 pub enum SessionParams {
     #[serde(rename = "wc_sessionPropose")]
     Propose(SessionPropose),
+    #[serde(rename = "wc_sessionRequest")]
+    Request(SessionRpcRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
