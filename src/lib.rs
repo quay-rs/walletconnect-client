@@ -12,10 +12,7 @@ pub mod serde_helpers;
 pub mod utils;
 pub mod watch;
 
-use std::sync::Mutex;
-use std::{collections::HashMap, sync::Arc};
-
-use self::rpc::TAG_SESSION_PROPOSE_REQUEST;
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use self::{
     auth::{AuthToken, SerializedAuthToken, RELAY_WEBSOCKET_ADDRESS},
@@ -24,26 +21,22 @@ use self::{
     metadata::{Metadata, Session},
     rpc::{
         ErrorResponse, RequestPayload, Response, ResponseParams, SuccessfulResponse,
-        TAG_SESSION_SETTLE_RESPONSE,
+        TAG_SESSION_PROPOSE_REQUEST, TAG_SESSION_REQUEST_REQUEST, TAG_SESSION_SETTLE_RESPONSE,
     },
-    utils::hash_message,
 };
 
 use chrono::{Duration, Utc};
 use ed25519_dalek::SigningKey;
 use ethers::types::Address;
-use ethers::types::{
-    transaction::eip712::Eip712,
-    {Signature, H160},
-};
+use ethers::types::H160;
 use futures::{
+    channel::mpsc::{self, UnboundedSender},
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
 use gloo_net::websocket::{futures::WebSocket, Message, WebSocketError};
 use log::{debug, error};
 use metadata::{Chain, Method, Namespace, SessionAccount, SessionRpcRequest};
-use rpc::TAG_SESSION_REQUEST_REQUEST;
 use serde::Serialize;
 use url::Url;
 use wasm_bindgen::__rt::WasmRefCell;
@@ -132,13 +125,13 @@ pub enum Error {
 pub struct WalletConnect {
     sink: Arc<WasmRefCell<SplitSink<WebSocket, Message>>>,
     stream: Arc<WasmRefCell<SplitStream<WebSocket>>>,
-    cipher: Arc<WasmRefCell<Cipher>>,
+    cipher: Arc<RefCell<Cipher>>,
     id_generator: MessageIdGenerator,
-    subscriptions: Arc<WasmRefCell<HashMap<Topic, String>>>,
-    pending: Arc<WasmRefCell<HashMap<MessageId, rpc::Params>>>,
-    requests_pending: Arc<WasmRefCell<HashMap<MessageId, rpc::Params>>>,
-    state: Arc<WasmRefCell<State>>,
-    session: Arc<WasmRefCell<Session>>,
+    subscriptions: Arc<RefCell<HashMap<Topic, String>>>,
+    pending: Arc<RefCell<HashMap<MessageId, rpc::Params>>>,
+    requests_pending: Arc<RefCell<HashMap<MessageId, UnboundedSender<serde_json::Value>>>>,
+    state: Arc<RefCell<State>>,
+    session: Arc<RefCell<Session>>,
     listener: Option<Arc<Box<dyn Fn(event::Event) + Send + 'static>>>,
 }
 
@@ -171,13 +164,13 @@ impl WalletConnect {
         Ok(Self {
             sink: Arc::new(WasmRefCell::new(sink)),
             stream: Arc::new(WasmRefCell::new(stream)),
-            cipher: Arc::new(WasmRefCell::new(Cipher::new())),
+            cipher: Arc::new(RefCell::new(Cipher::new())),
             id_generator: MessageIdGenerator::default(),
-            subscriptions: Arc::new(WasmRefCell::new(HashMap::new())),
-            pending: Arc::new(WasmRefCell::new(HashMap::new())),
-            requests_pending: Arc::new(WasmRefCell::new(HashMap::new())),
-            state: Arc::new(WasmRefCell::new(State::Connecting)),
-            session: Arc::new(WasmRefCell::new(Session::from(metadata, chain_id))),
+            subscriptions: Arc::new(RefCell::new(HashMap::new())),
+            pending: Arc::new(RefCell::new(HashMap::new())),
+            requests_pending: Arc::new(RefCell::new(HashMap::new())),
+            state: Arc::new(RefCell::new(State::Connecting)),
+            session: Arc::new(RefCell::new(Session::from(metadata, chain_id))),
             listener: if let Some(l) = listener { Some(Arc::new(l)) } else { None },
         })
     }
@@ -358,8 +351,14 @@ impl WalletConnect {
                 true,
             )
             .await?;
-        debug!("Message sent with id {message_id}");
-        Err(Error::BadParam)
+
+        let (tx, mut rx) = mpsc::unbounded::<serde_json::Value>();
+        self.requests_pending.borrow_mut().insert(message_id, tx);
+
+        match rx.next().await {
+            Some(value) => Ok(value),
+            None => Err(Error::BadResponse),
+        }
     }
 
     pub async fn wallet_respond(
@@ -409,7 +408,6 @@ impl WalletConnect {
             result: serde_json::Value::Bool(success),
         });
         let serialized_payload = serde_json::to_string(&payload)?;
-        debug!("Responding: {}", &serialized_payload);
         self.sink.borrow_mut().send(Message::Text(serialized_payload)).await?;
         Ok(())
     }
@@ -428,6 +426,10 @@ impl WalletConnect {
     async fn consume_message(&mut self, topic: &Topic, payload: &str) -> Result<(), Error> {
         debug!("RECEIVED MESSAGE:\n {}", self.cipher.borrow().decode_to_string(&topic, &payload)?);
         let request = self.cipher.borrow().decode(topic, payload)?;
+
+        // This protocol was invented by halfwitts not getting how to diffrenciate types properly.
+        // A typical wallet response is formatted clo
+
         match request {
             rpc::SessionMessage::Error(session_error) => {
                 error!("Received wallet error {session_error:?}");
@@ -441,6 +443,15 @@ impl WalletConnect {
                     )?;
                     self.subscribe(new_topic.clone()).await?;
                     *self.state.borrow_mut() = State::SwitchingTopic(new_topic.clone());
+                    Ok(())
+                }
+                rpc::SessionResultParams::Response(resp) => {
+                    match self.requests_pending.borrow_mut().remove(&response.id) {
+                        Some(mut tx) => {
+                            _ = tx.send(resp).await;
+                        }
+                        None => {}
+                    };
                     Ok(())
                 }
                 _ => {
@@ -487,6 +498,7 @@ impl WalletConnect {
     }
 
     async fn process_error_response(&mut self, response: &ErrorResponse) -> Result<(), Error> {
+        debug!("Error {response:?}");
         if let Some(_) = self.pending.borrow_mut().remove(&response.id) {
             error!("Received error response from server {response:?}");
 
@@ -532,7 +544,6 @@ impl WalletConnect {
     }
 
     async fn state_change(&mut self, new_state: State) -> Result<(), Error> {
-        debug!("State changed from to {new_state:?}");
         *self.state.borrow_mut() = new_state.clone();
         match new_state {
             State::SessionProposed(ref topic) => {

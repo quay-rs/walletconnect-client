@@ -252,12 +252,15 @@ pub struct SessionRpcRequestData {
 #[serde(rename_all = "camelCase")]
 pub struct SessionRpcRequest {
     pub request: SessionRpcRequestData,
-    pub chain_id: u64,
+    pub chain_id: Chain,
 }
 
 impl SessionRpcRequest {
     pub fn new(method: &str, params: Option<serde_json::Value>, chain_id: u64) -> Self {
-        Self { request: SessionRpcRequestData { method: method.to_string(), params }, chain_id }
+        Self {
+            request: SessionRpcRequestData { method: method.to_string(), params },
+            chain_id: Chain::Eip155(chain_id),
+        }
     }
 }
 

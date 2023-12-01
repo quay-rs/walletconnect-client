@@ -123,7 +123,6 @@ impl Cipher {
     ) -> Result<String, CipherError> {
         let cipher = self.ciphers.get(topic).ok_or(CipherError::UnknownTopic)?;
         let serialized_payload = serde_json::to_string(payload)?;
-        debug!("Serialized for encryption {serialized_payload}");
         let encrypted_payload = cipher.encrypt(&nonce, &*serialized_payload.into_bytes())?;
         let mut envelope = envelope_type.as_bytes();
         envelope.extend(nonce.to_vec());

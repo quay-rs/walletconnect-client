@@ -51,9 +51,13 @@ In progress of creation.
 ## Features
 
 - [X] Session creation and handling
+- [X] Handling transaction signatures
+- [X] Handling typed data signatures
 - [ ] Handling manual chain changes
-- [ ] Handling transaction signatures
-- [ ] Handling typed data signatures
+- [ ] Handling events
+- [ ] Handling pings 
+- [ ] Handling session updates
+- [ ] Handling session deletion
 - [ ] Handling non-WASM usage for servers
 
 ## Note on WASM

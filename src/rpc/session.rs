@@ -28,6 +28,7 @@ pub enum SessionResultParams {
     Responder(Responder),
     Error(SessionError),
     Boolean(bool),
+    Response(serde_json::Value),
 }
 
 pub trait SessionPayload: Serializable {
