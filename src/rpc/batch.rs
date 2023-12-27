@@ -8,6 +8,7 @@ use super::{
 use serde::{Deserialize, Serialize};
 /// Multi-topic subscription request parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[doc(hidden)]
 pub struct BatchSubscribe {
     /// The topics to subscribe to.
     pub topics: Vec<Topic>,
@@ -45,6 +46,7 @@ impl RequestPayload for BatchSubscribe {
 
 /// Multi-topic unsubscription request parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[doc(hidden)]
 pub struct BatchUnsubscribe {
     /// The subscriptions to unsubscribe from.
     pub subscriptions: Vec<Unsubscribe>,
@@ -82,6 +84,7 @@ impl RequestPayload for BatchUnsubscribe {
 
 /// Data structure representing batch fetch request params.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[doc(hidden)]
 pub struct BatchFetchMessages {
     /// The topics of the messages to fetch.
     pub topics: Vec<Topic>,
@@ -119,6 +122,7 @@ impl RequestPayload for BatchFetchMessages {
 
 /// Represents a message receipt.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[doc(hidden)]
 pub struct Receipt {
     /// The topic of the message to acknowledge.
     pub topic: Topic,
@@ -129,6 +133,7 @@ pub struct Receipt {
 
 /// Data structure representing publish request params.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[doc(hidden)]
 pub struct BatchReceiveMessages {
     /// The receipts to acknowledge.
     pub receipts: Vec<Receipt>,

@@ -1,15 +1,29 @@
+//! A simple dApp client library for wallet interaction using WalletConnect v2 protocol.
+#![doc = include_str!("../README.md")]
+#[doc(hidden)]
 pub mod auth;
+#[doc(hidden)]
 pub mod cipher;
+#[doc(hidden)]
 pub mod did;
+#[doc(hidden)]
 pub mod domain;
+#[doc(hidden)]
 pub mod event;
+#[doc(hidden)]
 pub mod jwt;
+#[doc(hidden)]
 pub mod macros;
 pub mod metadata;
+#[doc(hidden)]
 pub mod prelude;
+#[doc(hidden)]
 pub mod rpc;
+#[doc(hidden)]
 pub mod serde_helpers;
+#[doc(hidden)]
 pub mod utils;
+#[doc(hidden)]
 pub mod watch;
 
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
@@ -43,17 +57,26 @@ use wasm_bindgen::__rt::WasmRefCell;
 use wasm_bindgen_futures::spawn_local;
 use x25519_dalek::PublicKey;
 
+/// Enum defining WalletConnect state at the given moment.
 #[derive(Debug, Clone)]
 pub enum State {
+    /// WalletConnect is yet to connect
     Connecting,
+    /// Initial subscription is done on given topic. Awaiting for server submission approval
     InitialSubscription(Topic),
+    /// Session has been proposed. Awaiting wallet to settle.
     SessionProposed(Topic),
+    /// Wallet has sent own symKey. Switching to topic for settlement
     SwitchingTopic(Topic),
+    /// Topic switched. Awaiting for wallets settlement message
     AwaitingSettlement(Topic),
+    /// WalletConnect client connected to wallet
     Connected(Topic),
+    /// WalletConnect client has been disconnected
     Disconnected,
 }
 
+/// MessageId generator based on sequence and current timestamp
 #[derive(Debug, Clone)]
 pub struct MessageIdGenerator {
     next: u64,
@@ -80,6 +103,7 @@ impl Default for MessageIdGenerator {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// WalletConnect error.
 pub enum Error {
     #[error("Query error")]
     Query,
@@ -121,6 +145,7 @@ pub enum Error {
     JSError(#[from] gloo_utils::errors::JsError),
 }
 
+/// Main struct for handling WallectConnect links with wallets.
 #[derive(Clone)]
 pub struct WalletConnect {
     sink: Arc<WasmRefCell<SplitSink<WebSocket, Message>>>,
@@ -136,6 +161,7 @@ pub struct WalletConnect {
 }
 
 impl WalletConnect {
+    /// Connecting to wallets using WalletConnect relay servers
     pub fn connect(
         project_id: ProjectId,
         chain_id: u64,
@@ -175,10 +201,13 @@ impl WalletConnect {
         })
     }
 
+    /// Forces disconnection from wallet and relay servers
     pub async fn disconnect(&self) -> Result<(), Error> {
         Ok(())
     }
 
+    /// Checks if given WallectConnect wallet connection is able to send transactions (not just
+    /// signing them)
     pub fn can_send(&self) -> bool {
         match self.namespace() {
             Some(namespace) => namespace.methods.contains(&Method::SendTransaction),
@@ -186,6 +215,7 @@ impl WalletConnect {
         }
     }
 
+    /// Checks i given WalletCOnnect wallet connection supporst given JSON-RPC method
     pub fn supports_method(&self, method: &str) -> bool {
         if let Ok(method) = method.parse::<Method>() {
             return match self.namespace() {
@@ -197,6 +227,7 @@ impl WalletConnect {
         false
     }
 
+    /// Gets main account from connected wallet. None if no wallet is connected yet.
     pub fn get_account(&self) -> Option<SessionAccount> {
         if let Some(namespace) = &self.namespace() {
             if let Some(accounts) = &namespace.accounts {
@@ -208,6 +239,7 @@ impl WalletConnect {
         None
     }
 
+    /// Get all accounts from connected wallet. None if no wallet is connected yet.
     pub fn get_accounts(&self) -> Option<Vec<SessionAccount>> {
         if let Some(namespace) = self.namespace() {
             return namespace.accounts.clone();
@@ -215,6 +247,8 @@ impl WalletConnect {
         None
     }
 
+    /// Get all accounts addresses from connected wallet limited to certain `chain_id`. None if no
+    /// wallet is connected yet.
     pub fn get_accounts_for_chain_id(&self, chain_id: u64) -> Option<Vec<Address>> {
         if let Some(namespace) = self.namespace() {
             if let Some(accounts) = &namespace.accounts {
@@ -232,6 +266,8 @@ impl WalletConnect {
         }
         None
     }
+
+    /// Gets wallets `chain_id`
     pub fn chain_id(&self) -> u64 {
         if let Some(account) = self.get_account() {
             let Chain::Eip155(chain_id) = account.chain;
@@ -240,6 +276,7 @@ impl WalletConnect {
         0
     }
 
+    /// Gets main accounts address.
     pub fn address(&self) -> ethers::types::Address {
         if let Some(account) = self.get_account() {
             account.account.into()
@@ -248,6 +285,7 @@ impl WalletConnect {
         }
     }
 
+    /// Initiates session with WalletConnect relay server
     pub async fn initiate_session(&mut self) -> Result<String, Error> {
         let (topic, key) = self.cipher.borrow_mut().generate();
         let pub_key = PublicKey::from(&key);
@@ -287,11 +325,13 @@ impl WalletConnect {
         ))
     }
 
+    /// Subscribe for given topic
     pub async fn subscribe(&mut self, topic: Topic) -> Result<(), Error> {
         self.send(&rpc::Subscribe { topic }).await?;
         Ok(())
     }
 
+    /// Fetch next message recieved from relay server.
     pub async fn next(&mut self) -> Result<Response, Error> {
         let mut stream = self.stream.borrow_mut();
         match stream.next().await {
@@ -306,6 +346,7 @@ impl WalletConnect {
         }
     }
 
+    /// Publish session payload
     pub async fn publish<T: rpc::SessionPayload>(
         &mut self,
         topic: &Topic,
@@ -332,6 +373,7 @@ impl WalletConnect {
         Ok(id)
     }
 
+    /// Sending JSON-RPC request to connected wallet.
     pub async fn request(
         &mut self,
         method: &str,
@@ -361,6 +403,7 @@ impl WalletConnect {
         }
     }
 
+    /// Responds to payload sent from connected wallet
     pub async fn wallet_respond(
         &mut self,
         topic: &Topic,
@@ -387,6 +430,7 @@ impl WalletConnect {
         Ok(())
     }
 
+    /// Sends payload to relay server
     pub async fn send<T: RequestPayload>(&mut self, request: &T) -> Result<(), Error> {
         let id = self.id_generator.next();
         let params = request.clone().into_params();
@@ -401,6 +445,7 @@ impl WalletConnect {
         Ok(())
     }
 
+    /// Sends response to given message recieved from relay server
     pub async fn respond(&mut self, id: MessageId, success: bool) -> Result<(), Error> {
         let payload = rpc::Response::Success(rpc::SuccessfulResponse {
             id,

@@ -24,9 +24,6 @@ pub enum ValidationError {
     BatchEmpty,
 }
 
-/// Errors caught while processing the request. These are meant to be serialized
-/// into [`ErrorResponse`], and should be specific enough for the clients to
-/// make sense of the problem.
 #[derive(Debug, thiserror::Error)]
 pub enum GenericError {
     #[error("Authorization error: {0}")]

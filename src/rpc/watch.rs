@@ -39,7 +39,6 @@ pub struct WatchRegisterResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WatchRegister {
-    /// JWT with [`watch::WatchRegisterClaims`] payload.
     pub register_auth: String,
 }
 
@@ -60,7 +59,6 @@ impl RequestPayload for WatchRegister {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WatchUnregister {
-    /// JWT with [`watch::WatchUnregisterClaims`] payload.
     pub unregister_auth: String,
 }
 
