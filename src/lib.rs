@@ -559,6 +559,7 @@ impl WalletConnect {
     ) -> Result<(), Error> {
         let state = self.state.borrow().clone();
         match request.params {
+            rpc::WalletMessage::Ping(_) => {}
             rpc::WalletMessage::Settlement(ref settlement) => {
                 if let State::AwaitingSettlement(settled_topic) = state {
                     self.session.borrow_mut().settle(&settlement);

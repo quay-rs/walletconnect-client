@@ -1,3 +1,5 @@
+use crate::metadata::Empty;
+
 use super::{
     super::{
         domain::MessageId,
@@ -82,4 +84,6 @@ pub struct WalletRequest {
 pub enum WalletMessage {
     #[serde(rename = "wc_sessionSettle")]
     Settlement(SessionSettlement),
+    #[serde(rename = "wc_sessionPing")]
+    Ping(Empty),
 }
