@@ -26,7 +26,7 @@ pub mod utils;
 #[doc(hidden)]
 pub mod watch;
 
-use std::{cell::RefCell, collections::HashMap, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, ops::DerefMut, sync::Arc};
 
 use self::{
     auth::{AuthToken, SerializedAuthToken, RELAY_WEBSOCKET_ADDRESS},
@@ -157,6 +157,7 @@ pub struct WalletConnect {
     requests_pending: Arc<RefCell<HashMap<MessageId, UnboundedSender<serde_json::Value>>>>,
     state: Arc<RefCell<State>>,
     session: Arc<RefCell<Session>>,
+    chain_id: Arc<RefCell<u64>>,
     listener: Option<Arc<Box<dyn Fn(event::Event) + Send + 'static>>>,
 }
 
@@ -197,6 +198,7 @@ impl WalletConnect {
             requests_pending: Arc::new(RefCell::new(HashMap::new())),
             state: Arc::new(RefCell::new(State::Connecting)),
             session: Arc::new(RefCell::new(Session::from(metadata, chain_id))),
+            chain_id: Arc::new(RefCell::new(chain_id)),
             listener: if let Some(l) = listener { Some(Arc::new(l)) } else { None },
         })
     }
@@ -269,11 +271,7 @@ impl WalletConnect {
 
     /// Gets wallets `chain_id`
     pub fn chain_id(&self) -> u64 {
-        if let Some(account) = self.get_account() {
-            let Chain::Eip155(chain_id) = account.chain;
-            return chain_id;
-        }
-        0
+        *self.chain_id.borrow()
     }
 
     /// Gets main accounts address.
@@ -457,6 +455,17 @@ impl WalletConnect {
         Ok(())
     }
 
+    /// Changes chain id of the connection and updates account list accordingly
+    pub async fn switch_network(&mut self, chain_id: u64) -> Result<(), Error> {
+        let mut chain = self.chain_id.borrow_mut();
+        *(chain.deref_mut()) = chain_id;
+        let this = self.clone();
+        spawn_local(async move {
+            _ = this.update_events();
+        });
+        Ok(())
+    }
+
     async fn decrypt_params(&mut self, params: ResponseParams) -> Result<(), Error> {
         match params {
             ResponseParams::Publish(payload) => {
@@ -632,23 +641,26 @@ impl WalletConnect {
     }
 
     fn update_events(&self) -> Result<(), Error> {
+        self.notify(event::Event::ChainChanged(self.chain_id()));
+        self.update_accounts()
+    }
+
+    fn update_accounts(&self) -> Result<(), Error> {
         let eip155_namespace = self.namespace().ok_or_else(|| Error::Unknown)?;
         if let Some(accounts) = &eip155_namespace.accounts {
-            if let Some(first) = accounts.iter().nth(0) {
-                let chain = first.chain.clone();
-                let metadata::Chain::Eip155(chain_id) = chain;
+            if accounts.len() > 0 {
+                let chain_id = metadata::Chain::Eip155(self.chain_id());
                 let accounts =
                     accounts
                         .iter()
                         .filter_map(|acc| {
-                            if acc.chain == chain {
+                            if acc.chain == chain_id {
                                 Some(acc.account.into())
                             } else {
                                 None
                             }
                         })
                         .collect::<Vec<_>>();
-                self.notify(event::Event::ChainChanged(chain_id));
                 self.notify(event::Event::AccountsChanged(accounts));
             }
         }
