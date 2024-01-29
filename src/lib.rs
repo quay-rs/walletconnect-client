@@ -1,5 +1,6 @@
 //! A simple dApp client library for wallet interaction using WalletConnect v2 protocol.
 #![doc = include_str!("../README.md")]
+
 #[doc(hidden)]
 pub mod auth;
 #[doc(hidden)]
@@ -26,7 +27,8 @@ pub mod utils;
 #[doc(hidden)]
 pub mod watch;
 
-use std::{borrow::BorrowMut, cell::RefCell, collections::HashMap, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
+use std::sync::Mutex;
 
 use self::{
     auth::{AuthToken, SerializedAuthToken, RELAY_WEBSOCKET_ADDRESS},
@@ -60,7 +62,7 @@ use x25519_dalek::{PublicKey, StaticSecret};
 #[derive(Clone, Serialize, Deserialize)]
 pub struct WalletConnectState {
     pub state: State,
-    pub keys: Vec<(Topic, StaticSecret)>
+    pub keys: Vec<(Topic, StaticSecret)>,
 }
 
 /// Enum defining WalletConnect state at the given moment.
@@ -164,7 +166,7 @@ pub struct WalletConnect {
     state: Arc<RefCell<State>>,
     session: Arc<RefCell<Session>>,
     chain_id: Arc<RefCell<u64>>,
-    listener: Option<Arc<Box<dyn FnMut(event::Event) + Send + 'static>>>,
+    listener: Option<Arc<Mutex<Box<dyn FnMut(event::Event) + Send + 'static>>>>,
 }
 
 impl WalletConnect {
@@ -195,8 +197,14 @@ impl WalletConnect {
         let ws = WebSocket::open(url.as_str())?;
         let (sink, stream) = ws.split();
 
-        let keys = match state { None => None, Some(ref state) => Some(state.keys.clone()) };
-        let s = match state { None => State::Connecting, Some(s) => s.state };
+        let keys = match state {
+            None => None,
+            Some(ref state) => Some(state.keys.clone())
+        };
+        let s = match state {
+            None => State::Connecting,
+            Some(s) => s.state
+        };
 
         Ok(Self {
             sink: Arc::new(WasmRefCell::new(sink)),
@@ -209,7 +217,7 @@ impl WalletConnect {
             state: Arc::new(RefCell::new(s)),
             session: Arc::new(RefCell::new(Session::from(metadata, chain_id))),
             chain_id: Arc::new(RefCell::new(chain_id)),
-            listener: if let Some(l) = listener { Some(Arc::new(l)) } else { None },
+            listener: if let Some(l) = listener { Some(Arc::new(Mutex::new(l))) } else { None },
         })
     }
 
@@ -217,7 +225,7 @@ impl WalletConnect {
     pub fn get_state(&self) -> WalletConnectState {
         WalletConnectState {
             state: (*self.state).clone().into_inner(),
-            keys: (*self.cipher).clone().into_inner().keys.into_iter().collect::<Vec<_>>()
+            keys: (*self.cipher).clone().into_inner().keys.into_iter().collect::<Vec<_>>(),
         }
     }
 
@@ -276,15 +284,15 @@ impl WalletConnect {
                     let chain_id = metadata::Chain::Eip155(chain_id);
                     let accounts =
                         accounts
-                        .iter()
-                        .filter_map(|acc| {
-                            if acc.chain == chain_id {
-                                Some(acc.account.into())
-                            } else {
-                                None
-                            }
-                        })
-                    .collect::<Vec<_>>();
+                            .iter()
+                            .filter_map(|acc| {
+                                if acc.chain == chain_id {
+                                    Some(acc.account.into())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>();
                     return Some(accounts);
                 }
             }
@@ -310,9 +318,9 @@ impl WalletConnect {
     pub async fn initiate_session(&mut self, initial_topics: Option<Vec<Topic>>) -> Result<String, Error> {
         let mut result = String::new();
         if let Some(topics) = initial_topics {
-           for topic in topics {
-               self.subscribe(topic).await?;
-           } 
+            for topic in topics {
+                self.subscribe(topic).await?;
+            }
         } else {
             let (topic, key) = (*self.cipher).borrow_mut().generate();
             let pub_key = PublicKey::from(&key);
@@ -611,7 +619,7 @@ impl WalletConnect {
                         TAG_SESSION_SETTLE_RESPONSE,
                         false,
                     )
-                    .await?;
+                        .await?;
                     // TODO: Implement session extension when expiry is close to an end
                     let now = Utc::now();
                     let expires_in = (*self.session).borrow_mut().expiry.unwrap() - now;
@@ -669,6 +677,7 @@ impl WalletConnect {
 
     fn notify(&mut self, event: event::Event) {
         if let Some(l) = self.listener.clone() {
+            let mut l = l.lock().unwrap();
             (*l)(event);
         }
     }
