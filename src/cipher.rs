@@ -4,7 +4,7 @@ use super::domain::{DecodedClientId, DecodedTopic, Topic};
 use chacha20poly1305::{aead::Aead, AeadCore, ChaCha20Poly1305, KeyInit, Nonce};
 use ed25519_dalek::VerifyingKey;
 use hkdf::Hkdf;
-use log::{debug, error};
+use log::error;
 use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -89,8 +89,16 @@ pub struct Cipher {
 }
 
 impl Cipher {
-    pub fn new() -> Self {
-        Self { keys: HashMap::new(), ciphers: HashMap::new() }
+    pub fn new(state: Option<Vec<(Topic, StaticSecret)>>) -> Self {
+        let mut keys = HashMap::new();
+        let mut ciphers = HashMap::new();
+        if let Some(state) = state {
+            for (topic, key) in state {
+                ciphers.insert(topic.clone(), ChaCha20Poly1305::new((&key.to_bytes()).into()));
+                keys.insert(topic, key);
+            }
+        }
+        Self { keys, ciphers }
     }
 
     pub fn generate(&mut self) -> (Topic, StaticSecret) {
