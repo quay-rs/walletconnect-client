@@ -366,12 +366,19 @@ impl WalletConnect {
                 self.subscribe(topic).await?;
             }
         } else {
-            let mut state = (*self.state).borrow_mut();
-            let (topic, key) = state.cipher.generate();
-            let pub_key = PublicKey::from(&key);
-            state.session.proposer.public_key = DecodedClientId::from_key(&pub_key).to_hex();
+            let mut topic;
+            let mut key;
+            {
+                let mut state = (*self.state).borrow_mut();
+                (topic, key) = state.cipher.generate();
+                let pub_key = PublicKey::from(&key);
+                state.session.proposer.public_key = DecodedClientId::from_key(&pub_key).to_hex();
+            }
             self.subscribe(topic.clone()).await?;
-            state.state = State::InitialSubscription(topic.clone());
+            {
+                let mut state = (*self.state).borrow_mut();
+                state.state = State::InitialSubscription(topic.clone());
+            }
             result = format!(
                 "wc:{}@2?relay-protocol=irn&symKey={}",
                 topic,
