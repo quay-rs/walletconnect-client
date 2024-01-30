@@ -9,7 +9,6 @@ pub mod cipher;
 pub mod did;
 #[doc(hidden)]
 pub mod domain;
-#[doc(hidden)]
 pub mod event;
 #[doc(hidden)]
 pub mod jwt;
