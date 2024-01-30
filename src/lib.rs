@@ -366,8 +366,8 @@ impl WalletConnect {
                 self.subscribe(topic).await?;
             }
         } else {
-            let mut topic;
-            let mut key;
+            let topic;
+            let key;
             {
                 let mut state = (*self.state).borrow_mut();
                 (topic, key) = state.cipher.generate();
