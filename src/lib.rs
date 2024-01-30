@@ -27,8 +27,7 @@ pub mod utils;
 #[doc(hidden)]
 pub mod watch;
 
-use std::{cell::RefCell, collections::HashMap, sync::Arc};
-use std::sync::Mutex;
+use std::{collections::HashMap, sync::Arc};
 
 use self::{
     auth::{AuthToken, SerializedAuthToken, RELAY_WEBSOCKET_ADDRESS},
@@ -53,10 +52,9 @@ use futures::{
 use gloo_net::websocket::{futures::WebSocket, Message, WebSocketError};
 use log::{debug, error};
 use metadata::{Method, Namespace, SessionAccount, SessionRpcRequest};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use url::Url;
 use wasm_bindgen::__rt::WasmRefCell;
-use wasm_bindgen_futures::spawn_local;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -66,7 +64,7 @@ pub struct WalletConnectState {
 }
 
 /// Enum defining WalletConnect state at the given moment.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum State {
     /// WalletConnect is yet to connect
     Connecting,
@@ -82,6 +80,15 @@ pub enum State {
     Connected(Topic),
     /// WalletConnect client has been disconnected
     Disconnected,
+}
+
+impl State {
+    pub fn is_connected(&self) -> bool {
+        match self {
+            Self::Connected(_) => true,
+            _ => false,
+        }
+    }
 }
 
 /// MessageId generator based on sequence and current timestamp
@@ -158,15 +165,14 @@ pub enum Error {
 pub struct WalletConnect {
     sink: Arc<WasmRefCell<SplitSink<WebSocket, Message>>>,
     stream: Arc<WasmRefCell<SplitStream<WebSocket>>>,
-    cipher: Arc<RefCell<Cipher>>,
+    cipher: Cipher,
     id_generator: MessageIdGenerator,
-    subscriptions: Arc<RefCell<HashMap<Topic, String>>>,
-    pending: Arc<RefCell<HashMap<MessageId, rpc::Params>>>,
-    requests_pending: Arc<RefCell<HashMap<MessageId, UnboundedSender<serde_json::Value>>>>,
-    state: Arc<RefCell<State>>,
-    session: Arc<RefCell<Session>>,
-    chain_id: Arc<RefCell<u64>>,
-    listener: Option<Arc<Mutex<Box<dyn FnMut(event::Event) + Send + 'static>>>>,
+    subscriptions: HashMap<Topic, String>,
+    pending: HashMap<MessageId, rpc::Params>,
+    requests_pending: HashMap<MessageId, UnboundedSender<serde_json::Value>>,
+    state: State,
+    session: Session,
+    chain_id: u64,
 }
 
 impl WalletConnect {
@@ -176,7 +182,6 @@ impl WalletConnect {
         chain_id: u64,
         metadata: Metadata,
         state: Option<WalletConnectState>,
-        listener: Option<Box<dyn FnMut(event::Event) + Send + 'static>>,
     ) -> Result<Self, Error> {
         let key = SigningKey::generate(&mut rand::thread_rng());
         let auth = AuthToken::new(&metadata.url).as_jwt(&key).map_err(|_| Error::Token)?;
@@ -199,38 +204,48 @@ impl WalletConnect {
 
         let keys = match state {
             None => None,
-            Some(ref state) => Some(state.keys.clone())
+            Some(ref state) => Some(state.keys.clone()),
         };
         let s = match state {
             None => State::Connecting,
-            Some(s) => s.state
+            Some(s) => s.state,
         };
 
         Ok(Self {
             sink: Arc::new(WasmRefCell::new(sink)),
             stream: Arc::new(WasmRefCell::new(stream)),
-            cipher: Arc::new(RefCell::new(Cipher::new(keys))),
+            cipher: Cipher::new(keys),
             id_generator: MessageIdGenerator::default(),
-            subscriptions: Arc::new(RefCell::new(HashMap::new())),
-            pending: Arc::new(RefCell::new(HashMap::new())),
-            requests_pending: Arc::new(RefCell::new(HashMap::new())),
-            state: Arc::new(RefCell::new(s)),
-            session: Arc::new(RefCell::new(Session::from(metadata, chain_id))),
-            chain_id: Arc::new(RefCell::new(chain_id)),
-            listener: if let Some(l) = listener { Some(Arc::new(Mutex::new(l))) } else { None },
+            subscriptions: HashMap::new(),
+            pending: HashMap::new(),
+            requests_pending: HashMap::new(),
+            state: s,
+            session: Session::from(metadata, chain_id),
+            chain_id,
         })
     }
 
     /// Stores full connection state and passes it for safekeeping
     pub fn get_state(&self) -> WalletConnectState {
         WalletConnectState {
-            state: (*self.state).clone().into_inner(),
-            keys: (*self.cipher).clone().into_inner().keys.into_iter().collect::<Vec<_>>(),
+            state: self.state.clone(),
+            keys: self.cipher.keys.clone().into_iter().collect::<Vec<_>>(),
         }
     }
 
     /// Forces disconnection from wallet and relay servers
-    pub async fn disconnect(&self) -> Result<(), Error> {
+    pub async fn disconnect(&mut self) -> Result<(), Error> {
+        // Clear all ciphers and queues;
+        self.cipher.clear();
+        self.pending.clear();
+        self.requests_pending.clear();
+
+        // We need to send disconnection event
+        // TODO: Send disconnection event
+
+        // Set state
+        self.state = State::Disconnected;
+
         Ok(())
     }
 
@@ -275,6 +290,25 @@ impl WalletConnect {
         None
     }
 
+    /// Returns a list of available ChainIds in connected account
+    pub fn available_networks(self) -> Vec<u64> {
+        let mut chain_ids = Vec::new();
+        if let Some(namespace) = self.namespace() {
+            if let Some(accounts) = &namespace.accounts {
+                for acc in accounts {
+                    match acc.chain {
+                        metadata::Chain::Eip155(chain_id) => {
+                            if !chain_ids.contains(&chain_id) {
+                                chain_ids.push(chain_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        chain_ids
+    }
+
     /// Get all accounts addresses from connected wallet limited to certain `chain_id`. None if no
     /// wallet is connected yet.
     pub fn get_accounts_for_chain_id(&self, chain_id: u64) -> Option<Vec<Address>> {
@@ -282,17 +316,16 @@ impl WalletConnect {
             if let Some(accounts) = &namespace.accounts {
                 if accounts.len() > 0 {
                     let chain_id = metadata::Chain::Eip155(chain_id);
-                    let accounts =
-                        accounts
-                            .iter()
-                            .filter_map(|acc| {
-                                if acc.chain == chain_id {
-                                    Some(acc.account.into())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>();
+                    let accounts = accounts
+                        .iter()
+                        .filter_map(|acc| {
+                            if acc.chain == chain_id {
+                                Some(acc.account.into())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
                     return Some(accounts);
                 }
             }
@@ -302,7 +335,7 @@ impl WalletConnect {
 
     /// Gets wallets `chain_id`
     pub fn chain_id(&self) -> u64 {
-        *self.chain_id.borrow()
+        self.chain_id
     }
 
     /// Gets main accounts address.
@@ -315,19 +348,21 @@ impl WalletConnect {
     }
 
     /// Initiates session with WalletConnect relay server
-    pub async fn initiate_session(&mut self, initial_topics: Option<Vec<Topic>>) -> Result<String, Error> {
+    pub async fn initiate_session(
+        &mut self,
+        initial_topics: Option<Vec<Topic>>,
+    ) -> Result<String, Error> {
         let mut result = String::new();
         if let Some(topics) = initial_topics {
             for topic in topics {
                 self.subscribe(topic).await?;
             }
         } else {
-            let (topic, key) = (*self.cipher).borrow_mut().generate();
+            let (topic, key) = self.cipher.generate();
             let pub_key = PublicKey::from(&key);
-            (*self.session).borrow_mut().proposer.public_key =
-                DecodedClientId::from_key(&pub_key).to_hex();
+            self.session.proposer.public_key = DecodedClientId::from_key(&pub_key).to_hex();
             self.subscribe(topic.clone()).await?;
-            *(*self.state).borrow_mut() = State::InitialSubscription(topic.clone());
+            self.state = State::InitialSubscription(topic.clone());
             result = format!(
                 "wc:{}@2?relay-protocol=irn&symKey={}",
                 topic,
@@ -335,30 +370,6 @@ impl WalletConnect {
             );
         }
 
-        let mut this = self.clone();
-        spawn_local(async move {
-            while let Ok(resp) = this.next().await {
-                match resp {
-                    Response::Success(resp) => {
-                        _ = this.process_response(&resp).await;
-                    }
-                    Response::Error(err) => {
-                        _ = this.process_error_response(&err).await;
-                    }
-                    Response::RPCResponse(req) => {
-                        let handled = match this.decrypt_params(req.params).await {
-                            Ok(_) => true,
-                            Err(err) => {
-                                error!("Failed to receive {err:?}");
-                                false
-                            }
-                        };
-                        _ = this.respond(req.id, handled).await;
-                    }
-                }
-            }
-            _ = this.state_change(State::Disconnected).await;
-        });
         Ok(result)
     }
 
@@ -369,7 +380,7 @@ impl WalletConnect {
     }
 
     /// Fetch next message recieved from relay server.
-    pub async fn next(&mut self) -> Result<Response, Error> {
+    pub async fn next_from_stream(&mut self) -> Result<Response, Error> {
         let mut stream = (*self.stream).borrow_mut();
         match stream.next().await {
             Some(Ok(Message::Bytes(_))) => Err(Error::BadResponse),
@@ -380,6 +391,46 @@ impl WalletConnect {
             }
 
             None => Err(Error::Disconnected),
+        }
+    }
+
+    pub async fn next(&mut self) -> Result<Option<event::Event>, Error> {
+        if self.state == State::Disconnected {
+            return Err(Error::Disconnected);
+        }
+
+        let was_connected = self.state.is_connected();
+        if let Ok(resp) = self.next_from_stream().await {
+            match resp {
+                Response::Success(resp) => {
+                    _ = self.process_response(&resp).await;
+                }
+                Response::Error(err) => {
+                    _ = self.process_error_response(&err).await;
+                }
+                Response::RPCResponse(req) => {
+                    let handled = match self.decrypt_params(req.params).await {
+                        Ok(_) => true,
+                        Err(err) => {
+                            error!("Failed to receive {err:?}");
+                            false
+                        }
+                    };
+                    _ = self.respond(req.id, handled).await;
+                }
+            }
+        } else {
+            self.state = State::Disconnected;
+        }
+
+        if was_connected != self.state.is_connected() {
+            Ok(Some(if self.state.is_connected() {
+                event::Event::Connected
+            } else {
+                event::Event::Disconnected
+            }))
+        } else {
+            Ok(None)
         }
     }
 
@@ -401,7 +452,7 @@ impl WalletConnect {
         });
         let req = rpc::Publish {
             topic: topic.clone(),
-            message: self.cipher.borrow().encode(topic, &payload)?,
+            message: self.cipher.encode(topic, &payload)?,
             ttl_secs,
             tag,
             prompt,
@@ -417,7 +468,7 @@ impl WalletConnect {
         params: Option<serde_json::Value>,
         chain_id: u64,
     ) -> Result<serde_json::Value, Error> {
-        let topic = match *self.state.borrow() {
+        let topic = match &self.state {
             State::Connected(ref topic) => Ok(topic.clone()),
             _ => Err(Error::Disconnected),
         }?;
@@ -432,7 +483,7 @@ impl WalletConnect {
             .await?;
 
         let (tx, mut rx) = mpsc::unbounded::<serde_json::Value>();
-        (*self.requests_pending).borrow_mut().insert(message_id, tx);
+        self.requests_pending.insert(message_id, tx);
 
         match rx.next().await {
             Some(value) => Ok(value),
@@ -458,7 +509,7 @@ impl WalletConnect {
         };
         let req = rpc::Publish {
             topic: topic.clone(),
-            message: self.cipher.borrow().encode(topic, &payload)?,
+            message: self.cipher.encode(topic, &payload)?,
             ttl_secs,
             tag,
             prompt,
@@ -476,7 +527,7 @@ impl WalletConnect {
             jsonrpc: rpc::JSON_RPC_VERSION_STR.to_string(),
             params: params.clone(),
         });
-        (*self.pending).borrow_mut().insert(id, params);
+        self.pending.insert(id, params);
         let serialized_payload = serde_json::to_string(&payload)?;
         (*self.sink).borrow_mut().send(Message::Text(serialized_payload)).await?;
         Ok(())
@@ -494,17 +545,6 @@ impl WalletConnect {
         Ok(())
     }
 
-    /// Changes chain id of the connection and updates account list accordingly
-    pub async fn switch_network(&mut self, chain_id: u64) -> Result<(), Error> {
-        let mut chain = (*self.chain_id).borrow_mut();
-        *chain = chain_id;
-        let mut this = self.clone();
-        spawn_local(async move {
-            _ = this.update_events();
-        });
-        Ok(())
-    }
-
     async fn decrypt_params(&mut self, params: ResponseParams) -> Result<(), Error> {
         match params {
             ResponseParams::Publish(payload) => {
@@ -517,8 +557,8 @@ impl WalletConnect {
     }
 
     async fn consume_message(&mut self, topic: &Topic, payload: &str) -> Result<(), Error> {
-        debug!("RECEIVED MESSAGE:\n {}", self.cipher.borrow().decode_to_string(&topic, &payload)?);
-        let request = (*self.cipher).borrow().decode(topic, payload)?;
+        debug!("RECEIVED MESSAGE:\n {}", self.cipher.decode_to_string(&topic, &payload)?);
+        let request = self.cipher.decode(topic, payload)?;
 
         match request {
             rpc::SessionMessage::Error(session_error) => {
@@ -527,16 +567,16 @@ impl WalletConnect {
             }
             rpc::SessionMessage::Response(response) => match response.result {
                 rpc::SessionResultParams::Responder(responder) => {
-                    let (new_topic, _) = (*self.cipher).borrow_mut().create_common_topic(
+                    let (new_topic, _) = self.cipher.create_common_topic(
                         topic,
                         DecodedClientId::from_hex(&responder.responder_public_key)?,
                     )?;
                     self.subscribe(new_topic.clone()).await?;
-                    *(*self.state).borrow_mut() = State::SwitchingTopic(new_topic.clone());
+                    self.state = State::SwitchingTopic(new_topic.clone());
                     Ok(())
                 }
                 rpc::SessionResultParams::Response(resp) => {
-                    match (*self.requests_pending).borrow_mut().remove(&response.id) {
+                    match self.requests_pending.remove(&response.id) {
                         Some(mut tx) => {
                             _ = tx.send(resp).await;
                         }
@@ -558,23 +598,22 @@ impl WalletConnect {
 
     async fn process_response(&mut self, response: &SuccessfulResponse) -> Result<(), Error> {
         // We need to remove the response from the pending
-        let potential_params = (*self.pending).borrow_mut().remove(&response.id);
+        let potential_params = self.pending.remove(&response.id);
         if let Some(params) = potential_params {
             match params {
                 rpc::Params::Publish(_) => {}
                 rpc::Params::Subscribe(sub) => {
                     let topic = sub.topic;
                     let sub_hash = response.result.to_string();
-                    (*self.subscriptions).borrow_mut().insert(topic.clone(), sub_hash);
-                    let state = self.state.borrow().clone();
-                    match state {
+                    self.subscriptions.insert(topic.clone(), sub_hash);
+                    match &self.state {
                         State::InitialSubscription(awaiting_topic) => {
-                            if topic == awaiting_topic {
+                            if topic == *awaiting_topic {
                                 self.state_change(State::SessionProposed(topic)).await?;
                             }
                         }
                         State::SwitchingTopic(awaiting_topic) => {
-                            if topic == awaiting_topic {
+                            if topic == *awaiting_topic {
                                 self.state_change(State::AwaitingSettlement(topic)).await?;
                             }
                         }
@@ -589,7 +628,7 @@ impl WalletConnect {
 
     async fn process_error_response(&mut self, response: &ErrorResponse) -> Result<(), Error> {
         debug!("Error {response:?}");
-        if let Some(_) = (*self.pending).borrow_mut().remove(&response.id) {
+        if let Some(_) = self.pending.remove(&response.id) {
             error!("Received error response from server {response:?}");
 
             // We should consider better error handling here
@@ -602,15 +641,13 @@ impl WalletConnect {
         topic: &Topic,
         request: &rpc::WalletRequest,
     ) -> Result<(), Error> {
-        let state = self.state.borrow().clone();
         match request.params {
             rpc::WalletMessage::Ping(_) => {}
             rpc::WalletMessage::Settlement(ref settlement) => {
-                if let State::AwaitingSettlement(settled_topic) = state {
-                    (*self.session).borrow_mut().settle(&settlement);
+                if let State::AwaitingSettlement(settled_topic) = &self.state {
+                    self.session.settle(&settlement);
                     self.state_change(State::Connected(settled_topic.clone())).await?;
                     // Inform about new wallets and chain - supress errors
-                    _ = self.update_events();
                     self.wallet_respond(
                         topic,
                         request.id,
@@ -619,14 +656,13 @@ impl WalletConnect {
                         TAG_SESSION_SETTLE_RESPONSE,
                         false,
                     )
-                        .await?;
+                    .await?;
                     // TODO: Implement session extension when expiry is close to an end
                     let now = Utc::now();
-                    let expires_in = (*self.session).borrow_mut().expiry.unwrap() - now;
+                    let expires_in = self.session.expiry.unwrap() - now;
                     debug!(
                         "Session expires at {:?} that is in {:?} seconds",
-                        self.session.borrow().expiry,
-                        expires_in
+                        self.session.expiry, expires_in
                     );
                 }
             }
@@ -635,10 +671,10 @@ impl WalletConnect {
     }
 
     async fn state_change(&mut self, new_state: State) -> Result<(), Error> {
-        self.set_state(&new_state);
+        self.state = new_state.clone();
         match new_state {
             State::SessionProposed(ref topic) => {
-                let propose = self.session.borrow().into_propose();
+                let propose = self.session.into_propose();
                 _ = self
                     .publish(
                         &topic,
@@ -649,48 +685,17 @@ impl WalletConnect {
                     )
                     .await?;
             }
-            State::Disconnected => {
-                debug!("WE NEED TO CLEAN UP!");
-                self.notify(event::Event::Disconnected);
-            }
-            State::Connected(_) => {
-                self.notify(event::Event::Connected);
-            }
             _ => {}
         }
         Ok(())
     }
 
-    fn set_state(&mut self, new_state: &State) {
-        let mut state = (*self.state).borrow_mut();
-        *state = new_state.clone();
-    }
-
     fn namespace(&self) -> Option<Namespace> {
-        if let Some(namespaces) = &self.session.borrow().namespaces {
+        if let Some(namespaces) = &self.session.namespaces {
             if let Some(eip155_namespace) = namespaces.get("eip155") {
                 return Some(eip155_namespace.clone());
             }
         }
         None
-    }
-
-    fn notify(&mut self, event: event::Event) {
-        if let Some(l) = self.listener.clone() {
-            let mut l = l.lock().unwrap();
-            (*l)(event);
-        }
-    }
-
-    fn update_events(&mut self) -> Result<(), Error> {
-        self.notify(event::Event::ChainChanged(self.chain_id()));
-        self.update_accounts()
-    }
-
-    fn update_accounts(&mut self) -> Result<(), Error> {
-        if let Some(accounts) = self.get_accounts() {
-            self.notify(event::Event::AccountsChanged(accounts.into_iter().map(|a| a.account).collect::<Vec<_>>()));
-        }
-        Ok(())
     }
 }

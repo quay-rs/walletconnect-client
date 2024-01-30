@@ -113,6 +113,11 @@ impl Cipher {
         self.keys.insert(topic, key);
     }
 
+    pub fn clear(&mut self) {
+        self.ciphers.clear();
+        self.keys.clear();
+    }
+
     pub fn encode<T: Serialize>(&self, topic: &Topic, payload: &T) -> Result<String, CipherError> {
         self.encode_with_params(
             topic,
