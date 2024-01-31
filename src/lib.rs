@@ -60,6 +60,7 @@ use x25519_dalek::{PublicKey, StaticSecret};
 pub struct WalletConnectState {
     pub state: State,
     pub keys: Vec<(Topic, StaticSecret)>,
+    pub session: Session,
 }
 
 /// Enum defining WalletConnect state at the given moment.
@@ -185,7 +186,7 @@ impl WalletConnect {
         project_id: ProjectId,
         chain_id: u64,
         metadata: Metadata,
-        state: Option<WalletConnectState>,
+        stored_state: Option<WalletConnectState>,
     ) -> Result<Self, Error> {
         let key = SigningKey::generate(&mut rand::thread_rng());
         let auth = AuthToken::new(&metadata.url).as_jwt(&key).map_err(|_| Error::Token)?;
@@ -206,13 +207,9 @@ impl WalletConnect {
         let ws = WebSocket::open(url.as_str())?;
         let (sink, stream) = ws.split();
 
-        let keys = match state {
-            None => None,
-            Some(ref state) => Some(state.keys.clone()),
-        };
-        let s = match state {
-            None => State::Connecting,
-            Some(s) => s.state,
+        let (keys, state, session) = match stored_state {
+            None => (None, State::Connecting, Session::from(metadata, chain_id)),
+            Some(ref s) => (Some(s.keys.clone()), s.state.clone(), s.session.clone()),
         };
 
         Ok(Self {
@@ -224,8 +221,8 @@ impl WalletConnect {
                 subscriptions: HashMap::new(),
                 pending: HashMap::new(),
                 requests_pending: HashMap::new(),
-                state: s,
-                session: Session::from(metadata, chain_id),
+                state,
+                session,
             })),
             chain_id,
         })
@@ -237,6 +234,7 @@ impl WalletConnect {
         WalletConnectState {
             state: state.state.clone(),
             keys: state.cipher.keys.clone().into_iter().collect::<Vec<_>>(),
+            session: state.session.clone(),
         }
     }
 
