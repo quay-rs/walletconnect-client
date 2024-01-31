@@ -29,7 +29,6 @@ pub use session::*;
 pub use subscribe::*;
 pub use subscription::*;
 pub use watch::*;
-pub use watch::*;
 
 use serde::{de::DeserializeOwned, Serialize};
 use std::fmt::Debug;
