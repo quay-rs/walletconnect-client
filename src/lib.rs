@@ -322,17 +322,18 @@ impl WalletConnect {
             if let Some(accounts) = &namespace.accounts {
                 if accounts.len() > 0 {
                     let chain_id = metadata::Chain::Eip155(chain_id);
-                    let accounts = accounts
-                        .iter()
-                        .filter_map(|acc| {
-                            if acc.chain == chain_id {
-                                Some(acc.account.into())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    return Some(accounts);
+                    return Some(
+                        accounts
+                            .iter()
+                            .filter_map(|acc| {
+                                if acc.chain == chain_id {
+                                    Some(acc.account.into())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>(),
+                    );
                 }
             }
         }
