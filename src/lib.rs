@@ -415,7 +415,6 @@ impl WalletConnect {
         }
 
         let was_connected = s.is_connected();
-        debug!("Waiting for wc stream event");
         if let Ok(resp) = self.next_from_stream().await {
             match resp {
                 Response::Success(resp) => {
@@ -439,7 +438,6 @@ impl WalletConnect {
             (*self.state).borrow_mut().state = State::Disconnected;
         }
 
-        debug!("New wc stream event handled");
         let is_connected = (*self.state).borrow().state.is_connected();
         if was_connected != is_connected {
             Ok(Some(if is_connected {
