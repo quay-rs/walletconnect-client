@@ -417,6 +417,7 @@ impl WalletConnect {
         }
 
         let was_connected = s.is_connected();
+        debug!("Waiting for wc stream event");
         if let Ok(resp) = self.next_from_stream().await {
             match resp {
                 Response::Success(resp) => {
@@ -440,6 +441,7 @@ impl WalletConnect {
             (*self.state).borrow_mut().state = State::Disconnected;
         }
 
+        debug!("New wc stream event handled");
         let is_connected = (*self.state).borrow().state.is_connected();
         if was_connected != is_connected {
             Ok(Some(if is_connected {
@@ -578,9 +580,7 @@ impl WalletConnect {
     }
 
     async fn consume_message(&self, topic: &Topic, payload: &str) -> Result<(), Error> {
-        let mut state = (*self.state).borrow_mut();
-        debug!("RECEIVED MESSAGE:\n {}", state.cipher.decode_to_string(&topic, &payload)?);
-        let request = state.cipher.decode(topic, payload)?;
+        let request = (*self.state).borrow().cipher.decode(topic, payload)?;
 
         match request {
             rpc::SessionMessage::Error(session_error) => {
@@ -589,15 +589,21 @@ impl WalletConnect {
             }
             rpc::SessionMessage::Response(response) => match response.result {
                 rpc::SessionResultParams::Responder(responder) => {
-                    let (new_topic, _) = state.cipher.create_common_topic(
-                        topic,
-                        DecodedClientId::from_hex(&responder.responder_public_key)?,
-                    )?;
-                    self.subscribe(new_topic.clone()).await?;
-                    state.state = State::SwitchingTopic(new_topic.clone());
+                    let sub_topic;
+                    {
+                        let mut state = (*self.state).borrow_mut();
+                        let (new_topic, _) = state.cipher.create_common_topic(
+                            topic,
+                            DecodedClientId::from_hex(&responder.responder_public_key)?,
+                        )?;
+                        sub_topic = new_topic.clone();
+                        state.state = State::SwitchingTopic(new_topic);
+                    }
+                    self.subscribe(sub_topic.clone()).await?;
                     Ok(())
                 }
                 rpc::SessionResultParams::Response(resp) => {
+                    let mut state = (*self.state).borrow_mut();
                     match state.requests_pending.remove(&response.id) {
                         Some(mut tx) => {
                             _ = tx.send(resp).await;
@@ -677,14 +683,24 @@ impl WalletConnect {
         topic: &Topic,
         request: &rpc::WalletRequest,
     ) -> Result<(), Error> {
-        let mut state = (*self.state).borrow_mut();
-        let s = state.state.clone();
+        let s = (*self.state).borrow().state.clone();
         match request.params {
             rpc::WalletMessage::Ping(_) => {}
             rpc::WalletMessage::Settlement(ref settlement) => {
                 if let State::AwaitingSettlement(settled_topic) = &s {
-                    state.session.settle(&settlement);
-                    state.state = State::Connected(settled_topic.clone());
+                    {
+                        let mut state = (*self.state).borrow_mut();
+
+                        state.session.settle(&settlement);
+                        state.state = State::Connected(settled_topic.clone());
+                        let now = Utc::now();
+                        let expires_in = state.session.expiry.unwrap() - now;
+                        // TODO: Implement session extension when expiry is close to an end
+                        debug!(
+                            "Session expires at {:?} that is in {:?} seconds",
+                            state.session.expiry, expires_in
+                        );
+                    }
                     // Inform about new wallets and chain - supress errors
                     self.wallet_respond(
                         topic,
@@ -695,13 +711,6 @@ impl WalletConnect {
                         false,
                     )
                     .await?;
-                    // TODO: Implement session extension when expiry is close to an end
-                    let now = Utc::now();
-                    let expires_in = state.session.expiry.unwrap() - now;
-                    debug!(
-                        "Session expires at {:?} that is in {:?} seconds",
-                        state.session.expiry, expires_in
-                    );
                 }
             }
         }
