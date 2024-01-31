@@ -488,8 +488,7 @@ impl WalletConnect {
         params: Option<serde_json::Value>,
         chain_id: u64,
     ) -> Result<serde_json::Value, Error> {
-        let mut state = (*self.state).borrow_mut();
-        let topic = match &state.state {
+        let topic = match &(*self.state).borrow().state {
             State::Connected(ref topic) => Ok(topic.clone()),
             _ => Err(Error::Disconnected),
         }?;
@@ -504,7 +503,7 @@ impl WalletConnect {
             .await?;
 
         let (tx, mut rx) = mpsc::unbounded::<serde_json::Value>();
-        state.requests_pending.insert(message_id, tx);
+        (*self.state).borrow_mut().requests_pending.insert(message_id, tx);
 
         match rx.next().await {
             Some(value) => Ok(value),
@@ -522,7 +521,7 @@ impl WalletConnect {
         tag: u32,
         prompt: bool,
     ) -> Result<(), Error> {
-        let state = (*self.state).borrow();
+        let state = (*self.state).borrow().clone();
         let ttl_secs = ttl.num_seconds().try_into().map_err(|_| Error::BadParam)?;
         let payload = rpc::SessionResponse {
             id,
