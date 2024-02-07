@@ -238,6 +238,11 @@ impl WalletConnect {
         }
     }
 
+    /// Set chain id
+    pub fn set_chain_id(&mut self, chain_id: u64) {
+        self.chain_id = chain_id;
+    }
+
     /// Forces disconnection from wallet and relay servers
     pub async fn disconnect(&self) -> Result<(), Error> {
         // Clear all ciphers and queues;
@@ -277,12 +282,10 @@ impl WalletConnect {
     }
 
     /// Gets main account from connected wallet. None if no wallet is connected yet.
-    pub fn get_account(&self) -> Option<SessionAccount> {
-        if let Some(namespace) = &self.namespace() {
-            if let Some(accounts) = &namespace.accounts {
-                if let Some(account) = accounts.iter().nth(0) {
-                    return Some(account.clone());
-                }
+    pub fn get_account(&self) -> Option<H160> {
+        if let Some(accounts) = self.get_accounts_for_chain_id(self.chain_id()) {
+            if let Some(account) = accounts.iter().nth(0) {
+                return Some(*account);
             }
         }
         None
@@ -348,7 +351,7 @@ impl WalletConnect {
     /// Gets main accounts address.
     pub fn address(&self) -> ethers::types::Address {
         if let Some(account) = self.get_account() {
-            account.account.into()
+            account
         } else {
             H160::zero()
         }
