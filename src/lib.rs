@@ -41,8 +41,8 @@ use self::{
 
 use chrono::{Duration, Utc};
 use ed25519_dalek::SigningKey;
-use ethers::types::Address;
 use ethers::types::H160;
+use ethers::{providers::JsonRpcError, types::Address};
 use futures::{
     channel::mpsc::{self, UnboundedSender},
     stream::{SplitSink, SplitStream},
@@ -142,7 +142,7 @@ pub enum Error {
     BadResponse,
 
     #[error("Wallet error")]
-    WalletError((i64, String)),
+    WalletError(JsonRpcError),
 
     #[error(transparent)]
     ClientIdDecodingError(#[from] ClientIdDecodingError),
@@ -160,12 +160,27 @@ pub enum Error {
     JSError(#[from] gloo_utils::errors::JsError),
 }
 
+impl Error {
+    pub fn as_error_respose(&self) -> Option<&JsonRpcError> {
+        match self {
+            Self::WalletError(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum WalletConnectResponse {
+    Value(serde_json::Value),
+    Error(JsonRpcError),
+}
+
 #[derive(Clone)]
 struct ClientState {
     pub cipher: Cipher,
     pub subscriptions: HashMap<Topic, String>,
     pub pending: HashMap<MessageId, rpc::Params>,
-    pub requests_pending: HashMap<MessageId, UnboundedSender<serde_json::Value>>,
+    pub requests_pending: HashMap<MessageId, UnboundedSender<WalletConnectResponse>>,
     pub state: State,
     pub session: Session,
 }
@@ -502,11 +517,15 @@ impl WalletConnect {
             )
             .await?;
 
-        let (tx, mut rx) = mpsc::unbounded::<serde_json::Value>();
+        let (tx, mut rx) = mpsc::unbounded::<WalletConnectResponse>();
         (*self.state).borrow_mut().requests_pending.insert(message_id, tx);
 
-        match rx.next().await {
-            Some(value) => Ok(value),
+        let ret = rx.next().await;
+        match ret {
+            Some(value) => match value {
+                WalletConnectResponse::Value(v) => Ok(v),
+                WalletConnectResponse::Error(error) => Err(Error::WalletError(error)),
+            },
             None => Err(Error::BadResponse),
         }
     }
@@ -583,8 +602,18 @@ impl WalletConnect {
 
         match request {
             rpc::SessionMessage::Error(session_error) => {
-                error!("Received wallet error {session_error:?}");
-                Err(Error::WalletError((session_error.error.code, session_error.error.message)))
+                let mut state = (*self.state).borrow_mut();
+                match state.requests_pending.remove(&session_error.id) {
+                    Some(mut tx) => {
+                        _ = tx
+                            .send(WalletConnectResponse::Error(
+                                session_error.error.as_error_response(),
+                            ))
+                            .await;
+                    }
+                    None => {}
+                }
+                Ok(())
             }
             rpc::SessionMessage::Response(response) => match response.result {
                 rpc::SessionResultParams::Responder(responder) => {
@@ -605,7 +634,7 @@ impl WalletConnect {
                     let mut state = (*self.state).borrow_mut();
                     match state.requests_pending.remove(&response.id) {
                         Some(mut tx) => {
-                            _ = tx.send(resp).await;
+                            _ = tx.send(WalletConnectResponse::Value(resp)).await;
                         }
                         None => {}
                     };

@@ -7,12 +7,20 @@ use super::{
     },
     Serializable,
 };
+use ethers::providers::JsonRpcError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Error {
     pub code: i64,
     pub message: String,
+    pub data: Option<serde_json::Value>,
+}
+
+impl Error {
+    pub fn as_error_response(&self) -> JsonRpcError {
+        JsonRpcError { code: self.code, message: self.message.clone(), data: self.data.clone() }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
