@@ -454,7 +454,8 @@ impl WalletConnect {
                 }
             }
         } else {
-            (*self.state).borrow_mut().state = State::Disconnected;
+            error!("We've got disconnected");
+            return Ok(Some(event::Event::Broken));
         }
 
         let is_connected = (*self.state).borrow().state.is_connected();
