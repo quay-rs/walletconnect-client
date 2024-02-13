@@ -53,9 +53,9 @@ In progress of creation.
 - [X] Session creation and handling
 - [X] Handling transaction signatures
 - [X] Handling typed data signatures
-- [ ] Handling manual chain changes
-- [ ] Handling events
-- [ ] Handling pings 
+- [X] Handling manual chain changes
+- [X] Handling events
+- [X] Handling pings 
 - [ ] Handling session updates
 - [ ] Handling session deletion
 - [ ] Handling non-WASM usage for servers
