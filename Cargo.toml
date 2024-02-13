@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 categories = ["cryptography::cryptocurrencies"]
 homepage = "https://quay.rs/"
 repository = "https://github.com/quay-rs/walletconnect-client"
-keywords = ["crypto", "ethers", "ethereum", "web3", "wasm", "walletconnect"]
+keywords = ["crypto", "ethereum", "web3", "wasm", "walletconnect"]
 
 [package.metadata.docs.rs]
 default-target = "wasm32-unknown-unknown"
