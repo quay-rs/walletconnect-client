@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Display, num::ParseIntError, str::FromStr};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use ethers::{abi::AbiEncode, types::H160, utils::hex};
+use ethers::{types::H160, utils::hex};
 use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
