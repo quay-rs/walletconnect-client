@@ -10,7 +10,7 @@ walletconnect-client = "0.1"
 And this to your code:
 
 ```rust
-use walletconnect-client::prelude::*;
+use walletconnect_client::prelude::*;
 ```
 
 To initiate walletconnect connection with the wallet, set up your dApps metadata:

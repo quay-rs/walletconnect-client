@@ -1,12 +1,13 @@
 [package]
 name = "walletconnect-client"
 description = "WASM library for walletconnect dApp connections"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 categories = ["cryptography::cryptocurrencies"]
 homepage = "https://quay.rs/"
+documentation = "https://docs.rs/walletconnect-client"
 repository = "https://github.com/quay-rs/walletconnect-client"
 keywords = ["crypto", "ethereum", "web3", "wasm", "walletconnect"]
 
